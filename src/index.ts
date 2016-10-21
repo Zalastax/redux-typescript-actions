@@ -1,92 +1,133 @@
 import {Action as ReduxAction} from "redux";
 
+declare var process: { env: { NODE_ENV: string } | undefined};
+
+const isDev = (process && process.env && process.env.NODE_ENV) != 'production'
 
 export interface Action<P> extends ReduxAction {
   type: string;
-  payload?: P;
+  payload: P;
   error?: boolean;
   meta?: Object;
 }
 
 export function isType<P>(
   action: ReduxAction,
-  actionCreator: ActionCreator<P>
+  actionCreator: ActionCreator<P, P>
 ): action is Action<P> {
   return action.type === actionCreator.type;
 }
 
-export interface ActionCreator<P> {
-  type: string;
-  (payload?: P, meta?: Object): Action<P>;
+export function isError<P, E extends Error>(action: Action<P | E>): action is Action<E> {
+  return action.error
 }
 
-export interface AsyncActionCreators<P, R> {
+export interface ActionCreator<T, P> {
   type: string;
-  started: ActionCreator<P>;
-  done: ActionCreator<{
-    params: P;
-    result: R;
-  }>;
-  failed: ActionCreator<{
-    params: P;
-    error: any;
-  }>;
+  (payload: T, meta?: Object): Action<P>;
+}
+
+export interface DoneAction<P, R> {
+  params: P;
+  result: R;
+}
+
+export interface FailedAction<P, E> {
+  params: P;
+  error: E;
+}
+
+export interface CompletedAction<P, D> {
+  params: P;
+  data: D;
+}
+
+export interface AsyncActionCreators<P, R, E> {
+  type: string;
+  started: ActionCreator<P, P>;
+  done: ActionCreator<DoneAction<P, R>, DoneAction<P, R>>;
+  failed: ActionCreator<FailedAction<P, E>, FailedAction<P, E>>;
+  complete: (payload?: CompletedAction<P, R | E>, meta?: Object) => Action<DoneAction<P, R> | FailedAction<P, E>>;
 }
 
 export interface ActionCreatorFactory {
-  <P>(type: string, commonMeta?: Object, error?: boolean): ActionCreator<P>;
+  <P>(type: string, commonMeta?: Object, error?: boolean): ActionCreator<P, P>;
 
-  async<P, S>(type: string, commonMeta?: Object): AsyncActionCreators<P, S>;
+  async<P, S, E>(type: string, commonMeta?: Object): AsyncActionCreators<P, S, E>;
 }
 
-
-export default function actionCreatorFactory(prefix?: string):
+export function actionCreatorFactory(prefix?: string):
 ActionCreatorFactory {
+
   const actionTypes = {};
+  const base = prefix ? `${prefix}/` : ""
 
-  function actionCreator<P>(type: string, commonMeta?: Object,
-                            error?: boolean): ActionCreator<P> {
-    if (actionTypes[type])
-      throw new Error(`Duplicate action type: ${type}`);
+  function baseActionCreator<P>(isError: (payload: P) => boolean, type: string, commonMeta?: Object): ActionCreator<P, P> {
+                      
+    const fullType = `${base}${type}`
 
-    actionTypes[type] = true;
+    if (isDev) {
+      if (actionTypes[fullType])
+        throw new Error(`Duplicate action type: ${fullType}`);
 
-    const fullType = prefix ? `${prefix}/${type}` : type;
+      actionTypes[fullType] = true;
+    }
 
     return Object.assign(
-      (payload?: P, meta?: Object) => {
-        const action: Action<P> = {
+      (payload: P, meta?: Object) => {
+        return {
           type: fullType,
           payload,
           meta: Object.assign({}, commonMeta, meta),
+          error: isError(payload)
         };
-
-        if (error)
-          action.error = error;
-
-        return action;
       },
       {type: fullType}
     );
   }
 
-  function asyncActionCreators<P, S>(
+  
+  const actionCreator = <P, E extends (Error | void)>(type: string, commonMeta?: Object) =>
+    baseActionCreator<P | E>(p => typeof p === "Error", type, commonMeta)
+
+  const actionCreator2 = <P>(type: string, error: boolean, commonMeta?: Object) =>
+    baseActionCreator<P>(() => error, type, commonMeta)
+
+  function asyncActionCreators<P, S, E>(
     type: string, commonMeta?: Object
-  ): AsyncActionCreators<P, S> {
+  ): AsyncActionCreators<P, S, E> {
+    const done = actionCreator2<DoneAction<P, S>>(`${type}_DONE`, false, commonMeta)
+    
+    const failed = actionCreator2<FailedAction<P, E>>(`${type}_FAILED`, true, commonMeta)
+    
+    // Calls done or failed depending on payload type
+    // Don't use unless E extends Error
+    const complete = (payload: CompletedAction<P, S | E>, meta?: Object): Action<DoneAction<P, S> | FailedAction<P, E>> => {
+      const isError = typeof payload.data === "Error" // Use temp variable to avoid never type in if else
+      if (isError) {
+        return failed({
+          params: payload.params,
+          error: payload.data as E,
+        }, meta)
+      } else {
+        return done({
+          params: payload.params,
+          result: payload.data as S,
+        }, meta)
+      }
+    }
+    
+
     return {
       type: prefix ? `${prefix}/${type}` : type,
-      started: actionCreator<P>(`${type}_STARTED`, commonMeta),
-      done: actionCreator<{
-        params: P;
-        result: S;
-      }>(`${type}_DONE`, commonMeta),
-      failed: actionCreator<{
-        params: P;
-        error: any;
-      }>(`${type}_FAILED`, commonMeta, true),
+      started: actionCreator2<P>(`${type}_STARTED`, false, commonMeta),
+      done,
+      failed,
+      complete,
     };
   }
 
   return Object.assign(actionCreator, {async: asyncActionCreators});
 }
 
+export default actionCreatorFactory()

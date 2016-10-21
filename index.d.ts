@@ -1,29 +1,39 @@
 import { Action as ReduxAction } from "redux";
 export interface Action<P> extends ReduxAction {
     type: string;
-    payload?: P;
+    payload: P;
     error?: boolean;
     meta?: Object;
 }
-export declare function isType<P>(action: ReduxAction, actionCreator: ActionCreator<P>): action is Action<P>;
-export interface ActionCreator<P> {
+export declare function isType<P>(action: ReduxAction, actionCreator: ActionCreator<P, P>): action is Action<P>;
+export declare function isError<P, E extends Error>(action: Action<P | E>): action is Action<E>;
+export interface ActionCreator<T, P> {
     type: string;
-    (payload?: P, meta?: Object): Action<P>;
+    (payload: T, meta?: Object): Action<P>;
 }
-export interface AsyncActionCreators<P, R> {
+export interface DoneAction<P, R> {
+    params: P;
+    result: R;
+}
+export interface FailedAction<P, E> {
+    params: P;
+    error: E;
+}
+export interface CompletedAction<P, D> {
+    params: P;
+    data: D;
+}
+export interface AsyncActionCreators<P, R, E> {
     type: string;
-    started: ActionCreator<P>;
-    done: ActionCreator<{
-        params: P;
-        result: R;
-    }>;
-    failed: ActionCreator<{
-        params: P;
-        error: any;
-    }>;
+    started: ActionCreator<P, P>;
+    done: ActionCreator<DoneAction<P, R>, DoneAction<P, R>>;
+    failed: ActionCreator<FailedAction<P, E>, FailedAction<P, E>>;
+    complete: (payload?: CompletedAction<P, R | E>, meta?: Object) => Action<DoneAction<P, R> | FailedAction<P, E>>;
 }
 export interface ActionCreatorFactory {
-    <P>(type: string, commonMeta?: Object, error?: boolean): ActionCreator<P>;
-    async<P, S>(type: string, commonMeta?: Object): AsyncActionCreators<P, S>;
+    <P>(type: string, commonMeta?: Object, error?: boolean): ActionCreator<P, P>;
+    async<P, S, E>(type: string, commonMeta?: Object): AsyncActionCreators<P, S, E>;
 }
-export default function actionCreatorFactory(prefix?: string): ActionCreatorFactory;
+export declare function actionCreatorFactory(prefix?: string): ActionCreatorFactory;
+declare var _default: ActionCreatorFactory;
+export default _default;
