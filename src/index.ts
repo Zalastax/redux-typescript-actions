@@ -13,7 +13,7 @@ export interface Action<P> extends ReduxAction {
 
 export function isType<P>(
   action: ReduxAction,
-  actionCreator: ActionCreator<P, P>
+  actionCreator: ActionCreator<P>
 ): action is Action<P> {
   return action.type === actionCreator.type;
 }
@@ -22,10 +22,16 @@ export function isError<P, E extends Error>(action: Action<P | E>): action is Ac
   return action.error
 }
 
-export interface ActionCreator<T, P> {
+export interface ActionCreator<P> {
   type: string;
-  (payload: T, meta?: Object): Action<P>;
+  (payload: P, meta?: Object): Action<P>;
 }
+
+export interface ActionCreatorWithoutPayload {
+  type: string;
+  (payload?: undefined, meta?: Object): Action<undefined>;
+}
+
 
 export interface DoneAction<P, R> {
   params: P;
@@ -44,14 +50,19 @@ export interface CompletedAction<P, D> {
 
 export interface AsyncActionCreators<P, R, E> {
   type: string;
-  started: ActionCreator<P, P>;
-  done: ActionCreator<DoneAction<P, R>, DoneAction<P, R>>;
-  failed: ActionCreator<FailedAction<P, E>, FailedAction<P, E>>;
+  started: ActionCreator<P>;
+  done: ActionCreator<DoneAction<P, R>>;
+  failed: ActionCreator<FailedAction<P, E>>;
   complete: (payload?: CompletedAction<P, R | E>, meta?: Object) => Action<DoneAction<P, R> | FailedAction<P, E>>;
 }
 
 export interface ActionCreatorFactory {
-  <P>(type: string, commonMeta?: Object, error?: boolean): ActionCreator<P, P>;
+  (type: string): ActionCreatorWithoutPayload;
+  <P>(type: string, commonMeta?: Object): ActionCreator<P>;
+  <P>(type: string, commonMeta: Object | undefined, isError: boolean): ActionCreator<P>;
+  <P, E>(type: string, commonMeta: Object | undefined, isError: (payload: P | E) => boolean): ActionCreator<P | E>;
+  <P, E extends Error>(type: string, commonMeta?: Object): ActionCreator<P | E>;
+  
 
   async<P, S, E>(type: string, commonMeta?: Object): AsyncActionCreators<P, S, E>;
 }
@@ -62,7 +73,7 @@ ActionCreatorFactory {
   const actionTypes = {};
   const base = prefix ? `${prefix}/` : ""
 
-  function baseActionCreator<P>(isError: (payload: P) => boolean, type: string, commonMeta?: Object): ActionCreator<P, P> {
+  function baseActionCreator<P>(isError: (payload: P) => boolean, type: string, commonMeta?: Object): ActionCreator<P> {
                       
     const fullType = `${base}${type}`
 
@@ -87,18 +98,25 @@ ActionCreatorFactory {
   }
 
   
-  const actionCreator = <P, E extends (Error | void)>(type: string, commonMeta?: Object) =>
-    baseActionCreator<P | E>(p => typeof p === "Error", type, commonMeta)
+  const actionCreator = <P, E>(type: string, commonMeta?: Object, isError?: ((payload: P | E) => boolean) | boolean) => {
+    let ef = p => typeof p === "Error"
+    if (isError !== undefined) {
+      if (typeof isError == "boolean") {
+        ef = () => isError
+      } else {
+        ef = isError
+      }
+    }
 
-  const actionCreator2 = <P>(type: string, error: boolean, commonMeta?: Object) =>
-    baseActionCreator<P>(() => error, type, commonMeta)
+    return baseActionCreator<P | E>(ef, type, commonMeta)
+  }
 
   function asyncActionCreators<P, S, E>(
     type: string, commonMeta?: Object
   ): AsyncActionCreators<P, S, E> {
-    const done = actionCreator2<DoneAction<P, S>>(`${type}_DONE`, false, commonMeta)
+    const done = actionCreator<DoneAction<P, S>, undefined>(`${type}_DONE`, commonMeta, false)
     
-    const failed = actionCreator2<FailedAction<P, E>>(`${type}_FAILED`, true, commonMeta)
+    const failed = actionCreator<FailedAction<P, E>, undefined>(`${type}_FAILED`, commonMeta, true)
     
     // Calls done or failed depending on payload type
     // Don't use unless E extends Error
@@ -120,7 +138,7 @@ ActionCreatorFactory {
 
     return {
       type: prefix ? `${prefix}/${type}` : type,
-      started: actionCreator2<P>(`${type}_STARTED`, false, commonMeta),
+      started: actionCreator<P, undefined>(`${type}_STARTED`, commonMeta, false),
       done,
       failed,
       complete,
